@@ -78,15 +78,15 @@ type TranscriptionResponse struct {
 }
 
 type ChunkItem struct {
-	ChunkID          string   `json:"chunk_id"`
-	VideoID          string   `json:"video_id"`
-	ChunkIndex       int      `json:"chunk_index"`
-	StartTime        float64  `json:"start_time"`
-	EndTime          float64  `json:"end_time"`
-	TimestampDisplay string   `json:"timestamp_display"`
-	Text             string   `json:"text"`
-	WordCount        int      `json:"word_count"`
-	SegmentIDs       []int    `json:"segment_ids"`
+	ChunkID          string  `json:"chunk_id"`
+	VideoID          string  `json:"video_id"`
+	ChunkIndex       int     `json:"chunk_index"`
+	StartTime        float64 `json:"start_time"`
+	EndTime          float64 `json:"end_time"`
+	TimestampDisplay string  `json:"timestamp_display"`
+	Text             string  `json:"text"`
+	WordCount        int     `json:"word_count"`
+	SegmentIDs       []int   `json:"segment_ids"`
 }
 
 type ChunkWithEmbedding struct {
@@ -282,19 +282,33 @@ func extractVideoInput(c *gin.Context) (rawURL string, title string) {
 	if c.Request.Body != nil {
 		if err := c.ShouldBindJSON(&body); err == nil {
 			rawURL = body.URL
-			if rawURL == "" { rawURL = body.URLAlt }
-			if rawURL == "" { rawURL = body.VideoURL }
-			if rawURL == "" { rawURL = body.VideoUrl }
-			if rawURL == "" { rawURL = body.Link }
+			if rawURL == "" {
+				rawURL = body.URLAlt
+			}
+			if rawURL == "" {
+				rawURL = body.VideoURL
+			}
+			if rawURL == "" {
+				rawURL = body.VideoUrl
+			}
+			if rawURL == "" {
+				rawURL = body.Link
+			}
 			title = body.Title
 		}
 	}
 
 	if rawURL == "" {
 		rawURL = c.PostForm("url")
-		if rawURL == "" { rawURL = c.PostForm("video_url") }
-		if rawURL == "" { rawURL = c.PostForm("videoUrl") }
-		if rawURL == "" { rawURL = c.PostForm("link") }
+		if rawURL == "" {
+			rawURL = c.PostForm("video_url")
+		}
+		if rawURL == "" {
+			rawURL = c.PostForm("videoUrl")
+		}
+		if rawURL == "" {
+			rawURL = c.PostForm("link")
+		}
 	}
 	if title == "" {
 		title = c.PostForm("title")
@@ -302,9 +316,15 @@ func extractVideoInput(c *gin.Context) (rawURL string, title string) {
 
 	if rawURL == "" {
 		rawURL = c.Query("url")
-		if rawURL == "" { rawURL = c.Query("video_url") }
-		if rawURL == "" { rawURL = c.Query("videoUrl") }
-		if rawURL == "" { rawURL = c.Query("link") }
+		if rawURL == "" {
+			rawURL = c.Query("video_url")
+		}
+		if rawURL == "" {
+			rawURL = c.Query("videoUrl")
+		}
+		if rawURL == "" {
+			rawURL = c.Query("link")
+		}
 	}
 	if title == "" {
 		title = c.Query("title")
@@ -1206,12 +1226,16 @@ func fetchChunkContext(videoID, chunkID string) (*ChunkContextResponse, error) {
 	if len(row) > 0 && row[0] != nil {
 		if m, ok := row[0].(map[string]interface{}); ok {
 			target.ChunkID, _ = m["chunk_id"].(string)
-			if idx, ok := m["chunk_index"].(float64); ok { target.ChunkIndex = int(idx) }
+			if idx, ok := m["chunk_index"].(float64); ok {
+				target.ChunkIndex = int(idx)
+			}
 			target.StartTime, _ = m["start_time"].(float64)
 			target.EndTime, _ = m["end_time"].(float64)
 			target.TimestampDisplay, _ = m["timestamp_display"].(string)
 			target.Text, _ = m["text"].(string)
-			if wc, ok := m["word_count"].(float64); ok { target.WordCount = int(wc) }
+			if wc, ok := m["word_count"].(float64); ok {
+				target.WordCount = int(wc)
+			}
 			target.VideoID, _ = m["video_id"].(string)
 		}
 	}
@@ -1223,7 +1247,9 @@ func fetchChunkContext(videoID, chunkID string) (*ChunkContextResponse, error) {
 				TimestampDisplay: m["timestamp_display"].(string),
 				Text:             m["text"].(string),
 			}
-			if idx, ok := m["chunk_index"].(float64); ok { prev.ChunkIndex = int(idx) }
+			if idx, ok := m["chunk_index"].(float64); ok {
+				prev.ChunkIndex = int(idx)
+			}
 		}
 	}
 
@@ -1234,7 +1260,9 @@ func fetchChunkContext(videoID, chunkID string) (*ChunkContextResponse, error) {
 				TimestampDisplay: m["timestamp_display"].(string),
 				Text:             m["text"].(string),
 			}
-			if idx, ok := m["chunk_index"].(float64); ok { next.ChunkIndex = int(idx) }
+			if idx, ok := m["chunk_index"].(float64); ok {
+				next.ChunkIndex = int(idx)
+			}
 		}
 	}
 
