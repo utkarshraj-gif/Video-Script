@@ -1,0 +1,72 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: video-rag-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - WHISPER_SERVICE_URL=http://whisper-service:5000
+      - QDRANT_URL=http://qdrant:6333
+      - NEO4J_HTTP_URL=http://neo4j:7474
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=videorag123
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=llama3.2
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - shared-downloads:/app/downloads
+    depends_on:
+      - whisper-service
+      - qdrant
+      - neo4j
+    restart: unless-stopped
+
+  whisper-service:
+    build:
+      context: ./transcription-service
+      dockerfile: Dockerfile
+    container_name: video-rag-whisper
+    ports:
+      - "5000:5000"
+    environment:
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - shared-downloads:/app/downloads
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: video-rag-qdrant
+    ports:
+      - "6335:6333"
+      - "6336:6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: video-rag-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=none
+      - NEO4J_dbms_security_auth__enabled=false
+    volumes:
+      - neo4j-data:/data
+    restart: unless-stopped
+
+volumes:
+  shared-downloads:
+  qdrant-storage:
+  neo4j-data:

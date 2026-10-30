@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video RAG | AI Video Assistant</title>
+
+    <style>
+        :root {
+            --bg: #0b1020;
+            --panel: #121a2d;
+            --panel-light: #18233b;
+            --border: #293650;
+            --text: #eef3ff;
+            --muted: #9ba9c4;
+            --primary: #7c83ff;
+            --primary-hover: #696ff0;
+            --success: #48d6a0;
+            --danger: #ff7777;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            min-height: 100vh;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.6;
+        }
+
+        button, input {
+            font: inherit;
+        }
+
+        .navbar {
+            height: 72px;
+            padding: 0 7%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            background: rgba(11, 16, 32, 0.95);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .brand-icon {
+            display: grid;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            border-radius: 11px;
+            background: var(--primary);
+            color: white;
+            font-size: 21px;
+        }
+
+        .nav-status {
+            color: var(--success);
+            font-size: 13px;
+        }
+
+        .container {
+            width: min(1100px, 90%);
+            margin: 55px auto;
+        }
+
+        .hero {
+            margin-bottom: 35px;
+        }
+
+        .eyebrow {
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 10px 0;
+            font-size: clamp(32px, 5vw, 46px);
+            line-height: 1.2;
+        }
+
+        .hero p, .section-description {
+            color: var(--muted);
+        }
+
+        .hero p {
+            max-width: 650px;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 22px;
+            align-items: start;
+        }
+
+        .card {
+            padding: 26px;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            background: var(--panel);
+        }
+
+        .card h2 {
+            font-size: 19px;
+            margin-bottom: 7px;
+        }
+
+        .section-description {
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+
+        label {
+            display: block;
+            margin: 17px 0 8px;
+            font-size: 13px;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            padding: 13px 14px;
+            color: var(--text);
+            background: #0b1223;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            outline: none;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(124, 131, 255, 0.12);
+        }
+
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px 16px;
+            border: none;
+            border-radius: 9px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .primary-button {
+            background: var(--primary);
+            color: white;
+        }
+
+        .primary-button:hover:not(:disabled) {
+            background: var(--primary-hover);
+        }
+
+        .secondary-button {
+            color: var(--text);
+            background: var(--panel-light);
+            border: 1px solid var(--border);
+        }
+
+        .message {
+            display: none;
+            margin-top: 18px;
+            padding: 12px;
+            border-radius: 9px;
+            font-size: 13px;
+            overflow-wrap: anywhere;
+        }
+
+        .message.success {
+            display: block;
+            color: var(--success);
+            background: rgba(72, 214, 160, 0.08);
+            border: 1px solid rgba(72, 214, 160, 0.25);
+        }
+
+        .message.error {
+            display: block;
+            color: var(--danger);
+            background: rgba(255, 119, 119, 0.08);
+            border: 1px solid rgba(255, 119, 119, 0.25);
+        }
+
+        .info-list {
+            list-style: none;
+        }
+
+        .info-list li {
+            display: flex;
+            gap: 12px;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .info-list li:last-child {
+            border-bottom: none;
+        }
+
+        .step-number {
+            flex-shrink: 0;
+            display: grid;
+            place-items: center;
+            width: 29px;
+            height: 29px;
+            border-radius: 8px;
+            background: var(--panel-light);
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        .info-list strong {
+            display: block;
+            font-size: 14px;
+        }
+
+        .info-list small {
+            display: block;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .api-note {
+            margin-top: 22px;
+            padding: 15px;
+            background: #0b1223;
+            border-radius: 10px;
+            color: var(--muted);
+            font-size: 12px;
+            overflow-wrap: anywhere;
+        }
+
+        .api-note code {
+            color: var(--success);
+        }
+
+        footer {
+            padding: 25px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        @media (max-width: 760px) {
+            .navbar {
+                padding: 0 5%;
+            }
+
+            .container {
+                margin: 35px auto;
+            }
+
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            .card {
+                padding: 21px;
+            }
+
+            .nav-status {
+                font-size: 11px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header class="navbar">
+        <div class="brand">
+            <div class="brand-icon">V</div>
+            <span>Video RAG</span>
+        </div>
+
+        <div class="nav-status">● API Development</div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <div class="eyebrow">AI-powered video understanding</div>
+            <h1>Turn videos into<br>searchable knowledge.</h1>
+            <p>
+                Add a video to your workspace. Video RAG will eventually
+                transcribe its content, index the transcript, and let you
+                ask questions about what was said.
+            </p>
+        </section>
+
+        <div class="layout">
+            <section class="card">
+                <h2>Add a video</h2>
+                <p class="section-description">
+                    Start by validating a YouTube video URL.
+                </p>
+
+                <form id="videoForm">
+                    <label for="videoUrl">YouTube video URL</label>
+                    <input
+                        id="videoUrl"
+                        name="videoUrl"
+                        type="url"
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        required
+                    >
+
+                    <label for="videoTitle">Video title (optional)</label>
+                    <input
+                        id="videoTitle"
+                        name="videoTitle"
+                        type="text"
+                        placeholder="e.g. Introduction to Artificial Intelligence"
+                    >
+
+                    <div class="button-row">
+                        <button
+                            id="validateButton"
+                            class="primary-button"
+                            type="submit"
+                        >
+                            Validate URL
+                        </button>
+
+                        <button
+                            id="clearButton"
+                            class="secondary-button"
+                            type="button"
+                        >
+                            Clear
+                        </button>
+                    </div>
+                </form>
+
+                <div
+                    id="message"
+                    class="message"
+                    role="status"
+                    aria-live="polite"
+                ></div>
+            </section>
+
+            <aside class="card">
+                <h2>How it works</h2>
+                <p class="section-description">
+                    Your video knowledge pipeline
+                </p>
+
+                <ul class="info-list">
+                    <li>
+                        <span class="step-number">1</span>
+                        <div>
+                            <strong>Validate video</strong>
+                            <small>Check the URL and identify the video.</small>
+                        </div>
+                    </li>
+
+                    <li>
+                        <span class="step-number">2</span>
+                        <div>
+                            <strong>Extract transcript</strong>
+                            <small>Extract audio and convert speech to text.</small>
+                        </div>
+                    </li>
+
+                    <li>
+                        <span class="step-number">3</span>
+                        <div>
+                            <strong>Create embeddings</strong>
+                            <small>Convert transcript chunks into vectors.</small>
+                        </div>
+                    </li>
+
+                    <li>
+                        <span class="step-number">4</span>
+                        <div>
+                            <strong>Search and ask questions</strong>
+                            <small>Retrieve relevant content and generate answers.</small>
+                        </div>
+                    </li>
+                </ul>
+
+                <div class="api-note">
+                    <div>Backend endpoint</div>
+                    <code>POST /api/v1/videos/validate-url</code>
+                </div>
+            </aside>
+        </div>
+    </main>
+
+    <footer>
+        Video RAG · Built with HTML, CSS, JavaScript, Go and Gin
+    </footer>
+
+    <script>
+        const API_BASE_URL = "http://localhost:8080";
+
+        const videoForm = document.getElementById("videoForm");
+        const videoUrlInput = document.getElementById("videoUrl");
+        const videoTitleInput = document.getElementById("videoTitle");
+        const validateButton = document.getElementById("validateButton");
+        const clearButton = document.getElementById("clearButton");
+        const messageBox = document.getElementById("message");
+
+        function showMessage(message, type) {
+            messageBox.textContent = message;
+            messageBox.className = `message ${type}`;
+        }
+
+        videoForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+
+            const url = videoUrlInput.value.trim();
+
+            if (!url) {
+                showMessage("Please enter a video URL.", "error");
+                return;
+            }
+
+            validateButton.disabled = true;
+            validateButton.textContent = "Validating...";
+            messageBox.className = "message";
+
+            try {
+                const response = await fetch(
+                    `${API_BASE_URL}/api/v1/videos/validate-url`,
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({ url })
+                    }
+                );
+
+                const data = await response.json();
+
+                if (!response.ok || !data.valid) {
+                    throw new Error(data.message || "URL validation failed.");
+                }
+
+                const title = videoTitleInput.value.trim();
+
+                showMessage(
+                    `URL validated successfully! Platform: ${data.platform}. ` +
+                    `Video ID: ${data.video_id}.` +
+                    (title ? ` Title: ${title}.` : ""),
+                    "success"
+                );
+            } catch (error) {
+                if (error instanceof TypeError) {
+                    showMessage(
+                        "Could not connect to the backend. Make sure the " +
+                        "Video RAG Docker container is running.",
+                        "error"
+                    );
+                } else {
+                    showMessage(error.message, "error");
+                }
+            } finally {
+                validateButton.disabled = false;
+                validateButton.textContent = "Validate URL";
+            }
+        });
+
+        clearButton.addEventListener("click", function () {
+            videoForm.reset();
+            messageBox.textContent = "";
+            messageBox.className = "message";
+        });
+    </script>
+</body>
+</html>

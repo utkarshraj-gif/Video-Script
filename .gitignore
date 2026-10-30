@@ -1,0 +1,39 @@
+# Binaries & build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+video-rag-backend
+
+# Temporary / downloaded media
+downloads/
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.wav
+*.opus
+
+# Go vendor & caches
+vendor/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Qdrant & Neo4j local storage / volumes
+qdrant_storage/
+neo4j_data/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
