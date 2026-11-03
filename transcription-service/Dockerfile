@@ -17,7 +17,7 @@ RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', dev
 # Pre-download the 384-dimensional embedding model
 RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2').embed(['warmup']))"
 
-COPY app.py .
+COPY . .
 
 EXPOSE 5000
 

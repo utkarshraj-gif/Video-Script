@@ -32,16 +32,54 @@ services:
     ports:
       - "5000:5000"
     environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - WHISPER_MODEL=base
       - WHISPER_DEVICE=cpu
       - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_TASK=translate
+      - WHISPER_BEAM_SIZE=1
       - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
       - QDRANT_URL=http://qdrant:6333
     volumes:
       - shared-downloads:/app/downloads
     depends_on:
       - qdrant
+      - redis
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ./transcription-service
+      dockerfile: Dockerfile
+    container_name: video-rag-celery-worker
+    command: celery -A celery_app worker --loglevel=info -c 2
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_TASK=translate
+      - WHISPER_BEAM_SIZE=1
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - shared-downloads:/app/downloads
+    depends_on:
+      - redis
+      - qdrant
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: video-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
     restart: unless-stopped
 
   qdrant:
@@ -71,3 +109,4 @@ volumes:
   shared-downloads:
   qdrant-storage:
   neo4j-data:
+  redis-data:

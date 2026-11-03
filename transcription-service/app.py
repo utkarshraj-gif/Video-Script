@@ -645,3 +645,72 @@ def list_qdrant_points(video_id: Optional[str] = None, limit: int = 100):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to scroll points from Qdrant: {str(e)}")
+
+class CeleryProcessRequest(BaseModel):
+    url: str
+
+@app.post("/tasks/process-video")
+def trigger_process_video(req: CeleryProcessRequest):
+    try:
+        from tasks import process_video_pipeline
+        task = process_video_pipeline.delay(req.url)
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "message": "Video processing queued in Celery worker"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to enqueue task: {str(e)}")
+
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    from celery_app import celery_app
+    from celery.result import AsyncResult
+
+    res = AsyncResult(task_id, app=celery_app)
+    state = res.state
+
+    if state == "PENDING":
+        return {
+            "task_id": task_id,
+            "status": "PENDING",
+            "percent": 10,
+            "step": "Queued in Celery",
+            "message": "Waiting for Celery worker to pick up task..."
+        }
+    elif state in ("PROGRESS", "STARTED"):
+        info = res.info if isinstance(res.info, dict) else {}
+        return {
+            "task_id": task_id,
+            "status": "PROGRESS",
+            "percent": info.get("percent", 25),
+            "step": info.get("step", "Processing video..."),
+            "message": info.get("message", "Celery worker processing...")
+        }
+    elif state == "SUCCESS":
+        return {
+            "task_id": task_id,
+            "status": "SUCCESS",
+            "percent": 100,
+            "step": "Complete",
+            "result": res.result,
+            "message": res.result.get("message", "Processing completed successfully!") if isinstance(res.result, dict) else "Done"
+        }
+    elif state == "FAILURE":
+        return {
+            "task_id": task_id,
+            "status": "FAILURE",
+            "percent": 100,
+            "step": "Failed",
+            "error": str(res.info) or "Task encountered an error",
+            "message": f"Task failed: {str(res.info)}"
+        }
+    else:
+        return {
+            "task_id": task_id,
+            "status": state,
+            "percent": 50,
+            "step": state,
+            "message": f"Task in state: {state}"
+        }
+

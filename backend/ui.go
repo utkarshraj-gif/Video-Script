@@ -1914,7 +1914,7 @@ func renderProductionUI(res *EmbedChunksResponse) string {
       document.getElementById('chatMessages').innerHTML = '<div class="msg msg-bot"><div class="msg-avatar avatar-bot">AI</div><div class="msg-bubble">Chat history cleared. Ask another question about the video!</div></div>';
     }
 
-    // TOP URL EXTRACTION LOGIC
+    // TOP URL EXTRACTION LOGIC (Celery Background Worker + Real-Time Polling)
     async function extractVideo() {
       const urlInput = document.getElementById('videoUrlInput');
       const url = urlInput.value.trim();
@@ -1926,22 +1926,17 @@ func renderProductionUI(res *EmbedChunksResponse) string {
       const modal = document.getElementById('processingModal');
       const extractBtn = document.getElementById('extractBtn');
       const progressBar = document.getElementById('modalProgressBar');
+      const modalDesc = document.getElementById('modalDesc');
+
       modal.style.display = 'flex';
       extractBtn.disabled = true;
-
-      // Animate progress steps
-      var pct = 15;
-      progressBar.style.width = pct + '%%';
-
-      const timer = setInterval(() => {
-        if (pct < 85) {
-          pct += 8;
-          progressBar.style.width = pct + '%%';
-          if (pct >= 30) document.getElementById('step2').className = 'step-item step-active';
-          if (pct >= 50) document.getElementById('step3').className = 'step-item step-active';
-          if (pct >= 70) document.getElementById('step4').className = 'step-item step-active';
-        }
-      }, 2500);
+      progressBar.style.width = '10%%';
+      document.getElementById('step1').className = 'step-item step-active';
+      document.getElementById('step2').className = 'step-item';
+      document.getElementById('step3').className = 'step-item';
+      document.getElementById('step4').className = 'step-item';
+      document.getElementById('step5').className = 'step-item';
+      document.getElementById('step6').className = 'step-item';
 
       try {
         const response = await fetch('/api/v1/videos/process', {
@@ -1950,13 +1945,19 @@ func renderProductionUI(res *EmbedChunksResponse) string {
           body: JSON.stringify({ url: url })
         });
 
-        clearInterval(timer);
-        progressBar.style.width = '100%%';
-        document.getElementById('step5').className = 'step-item step-active';
-        document.getElementById('step6').className = 'step-item step-active';
-
         const result = await response.json();
+
+        // 1. If queued in Celery, poll real-time task progress
+        if (result.status === 'queued' && result.task_id) {
+          modalDesc.textContent = 'Enqueued in Celery worker. Processing in background...';
+          pollCeleryTask(result.task_id);
+          return;
+        }
+
+        // 2. Synchronous completion fallback
         if (result.status === 'success' && result.redirect_url) {
+          progressBar.style.width = '100%%';
+          document.getElementById('step6').className = 'step-item step-active';
           window.location.href = result.redirect_url;
         } else {
           alert('Extraction failed: ' + (result.message || 'Unknown error'));
@@ -1964,11 +1965,57 @@ func renderProductionUI(res *EmbedChunksResponse) string {
           extractBtn.disabled = false;
         }
       } catch (e) {
-        clearInterval(timer);
         alert('Extraction error: ' + e.message);
         modal.style.display = 'none';
         extractBtn.disabled = false;
       }
+    }
+
+    function pollCeleryTask(taskId) {
+      const modal = document.getElementById('processingModal');
+      const extractBtn = document.getElementById('extractBtn');
+      const progressBar = document.getElementById('modalProgressBar');
+      const modalDesc = document.getElementById('modalDesc');
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/v1/tasks/' + taskId);
+          const data = await res.json();
+
+          if (data.percent) {
+            progressBar.style.width = data.percent + '%%';
+          }
+          if (data.message) {
+            modalDesc.textContent = data.message;
+          }
+
+          const p = data.percent || 0;
+          if (p >= 15) document.getElementById('step1').className = 'step-item step-active';
+          if (p >= 30) document.getElementById('step2').className = 'step-item step-active';
+          if (p >= 55) document.getElementById('step3').className = 'step-item step-active';
+          if (p >= 75) document.getElementById('step4').className = 'step-item step-active';
+          if (p >= 88) document.getElementById('step5').className = 'step-item step-active';
+          if (p >= 95) document.getElementById('step6').className = 'step-item step-active';
+
+          if (data.status === 'SUCCESS' || (data.result && data.result.status === 'success')) {
+            clearInterval(pollInterval);
+            progressBar.style.width = '100%%';
+            document.getElementById('step6').className = 'step-item step-active';
+            modalDesc.textContent = 'Complete! Redirecting to dashboard...';
+            const targetUrl = (data.result && data.result.redirect_url) ? data.result.redirect_url : ('/?video_id=' + (data.result ? data.result.video_id : ''));
+            setTimeout(() => {
+              window.location.href = targetUrl;
+            }, 600);
+          } else if (data.status === 'FAILURE') {
+            clearInterval(pollInterval);
+            alert('Celery extraction failed: ' + (data.error || data.message || 'Unknown error'));
+            modal.style.display = 'none';
+            extractBtn.disabled = false;
+          }
+        } catch (err) {
+          console.error('Task polling error:', err);
+        }
+      }, 1500);
     }
 
     function escapeHtml(str) {
