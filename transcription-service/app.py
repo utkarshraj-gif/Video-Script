@@ -151,12 +151,14 @@ class TranscribeRequest(BaseModel):
     audio_path: Optional[str] = None
     video_id: Optional[str] = None
     language: Optional[str] = None
+    task: Optional[str] = "translate"
 
 class TranscribeResponse(BaseModel):
     status: str
     video_id: str
     model: str
     detected_language: str
+    language_display: str
     language_probability: float
     duration_seconds: float
     transcription_time_seconds: float
@@ -311,6 +313,43 @@ def health_check():
         "collection": COLLECTION_NAME
     }
 
+def determine_language_label(info) -> str:
+    lang = (getattr(info, "language", None) or "").lower()
+    all_probs = {}
+    if hasattr(info, "all_language_probs") and info.all_language_probs:
+        try:
+            all_probs = {k.lower(): v for k, v in info.all_language_probs}
+        except Exception:
+            all_probs = {}
+            
+    en_prob = all_probs.get("en", 0.0)
+    hi_prob = all_probs.get("hi", 0.0)
+
+    # If both Hindi and English have presence (Hinglish/combined):
+    if (lang == "hi" and en_prob >= 0.12) or (lang == "en" and hi_prob >= 0.12):
+        return "Eng + Hin"
+
+    if lang == "hi":
+        if en_prob >= 0.08:
+            return "Eng + Hin"
+        return "Hindi"
+
+    if lang == "en":
+        if hi_prob >= 0.08:
+            return "Eng + Hin"
+        return "English"
+
+    lang_map = {
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "te": "Telugu",
+        "ta": "Tamil",
+        "bn": "Bengali",
+        "mr": "Marathi",
+    }
+    return lang_map.get(lang, lang.upper() if lang else "English")
+
 @app.post("/transcribe", response_model=TranscribeResponse)
 def transcribe_audio(req: TranscribeRequest):
     audio_path = req.audio_path
@@ -352,10 +391,12 @@ def transcribe_audio(req: TranscribeRequest):
         model = get_whisper_model()
         start_time = time.time()
 
+        task = req.task or os.getenv("WHISPER_TASK", "translate")
         segments_generator, info = model.transcribe(
             audio_path,
             beam_size=5,
             language=req.language,
+            task=task,
             vad_filter=True
         )
 
@@ -380,6 +421,7 @@ def transcribe_audio(req: TranscribeRequest):
             video_id=video_id,
             model=WHISPER_MODEL_SIZE,
             detected_language=info.language,
+            language_display=determine_language_label(info),
             language_probability=round(info.language_probability, 3),
             duration_seconds=round(info.duration, 2),
             transcription_time_seconds=transcription_time,

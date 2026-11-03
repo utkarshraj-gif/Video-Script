@@ -69,6 +69,7 @@ type TranscriptionResponse struct {
 	VideoID                  string                 `json:"video_id"`
 	Model                    string                 `json:"model"`
 	DetectedLanguage         string                 `json:"detected_language"`
+	LanguageDisplay          string                 `json:"language_display,omitempty"`
 	LanguageProbability      float64                `json:"language_probability"`
 	DurationSeconds          float64                `json:"duration_seconds"`
 	TranscriptionTimeSeconds float64                `json:"transcription_time_seconds"`
@@ -109,6 +110,9 @@ type EmbedChunksResponse struct {
 	Status              string               `json:"status"`
 	VideoID             string               `json:"video_id"`
 	Title               string               `json:"title,omitempty"`
+	DetectedLanguage    string               `json:"detected_language,omitempty"`
+	LanguageDisplay     string               `json:"language_display,omitempty"`
+	LanguageProbability float64              `json:"language_probability,omitempty"`
 	EmbeddingModel      string               `json:"embedding_model"`
 	EmbeddingDimensions int                  `json:"embedding_dimensions"`
 	QdrantMode          string               `json:"qdrant_mode"`
@@ -696,6 +700,7 @@ func requestWhisperTranscription(videoID, audioFileName string) (*TranscriptionR
 	payload := map[string]string{
 		"video_id":   videoID,
 		"audio_path": filepath.Join("/app/downloads", audioFileName),
+		"task":       "translate",
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -724,7 +729,32 @@ func requestWhisperTranscription(videoID, audioFileName string) (*TranscriptionR
 		return nil, fmt.Errorf("could not parse transcription response: %w", err)
 	}
 
+	if result.LanguageDisplay == "" {
+		result.LanguageDisplay = formatLanguageDisplay(result.DetectedLanguage, "")
+	}
+
 	return &result, nil
+}
+
+// formatLanguageDisplay standardizes language labels into "English", "Hindi", or "Eng + Hin".
+func formatLanguageDisplay(lang, explicitDisplay string) string {
+	if explicitDisplay != "" {
+		return explicitDisplay
+	}
+	l := strings.ToLower(strings.TrimSpace(lang))
+	switch l {
+	case "en", "english":
+		return "English"
+	case "hi", "hindi":
+		return "Hindi"
+	case "hi+en", "en+hi", "eng + hin", "hinglish":
+		return "Eng + Hin"
+	default:
+		if l == "" {
+			return "English"
+		}
+		return strings.ToUpper(l[:1]) + l[1:]
+	}
 }
 
 // requestQdrantPoints queries the Python microservice for points stored in Qdrant.
@@ -2206,6 +2236,9 @@ func main() {
 		}
 
 		result.Title = video.Title
+		result.DetectedLanguage = transcript.DetectedLanguage
+		result.LanguageDisplay = formatLanguageDisplay(transcript.DetectedLanguage, transcript.LanguageDisplay)
+		result.LanguageProbability = transcript.LanguageProbability
 
 		// Cache regular chunks
 		var simpleChunks []ChunkItem
@@ -2656,6 +2689,9 @@ Instructions:
 			return
 		}
 		embedRes.Title = video.Title
+		embedRes.DetectedLanguage = transcript.DetectedLanguage
+		embedRes.LanguageDisplay = formatLanguageDisplay(transcript.DetectedLanguage, transcript.LanguageDisplay)
+		embedRes.LanguageProbability = transcript.LanguageProbability
 
 		// 4. Cache simple chunks
 		var simpleChunks []ChunkItem
@@ -2689,13 +2725,15 @@ Instructions:
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":       "success",
-			"video_id":     video.ID,
-			"title":        video.Title,
-			"chunks_count": len(simpleChunks),
-			"neo4j_synced": graphRes != nil,
-			"redirect_url": redirectURL,
-			"message":      fmt.Sprintf("Video '%s' successfully indexed in Qdrant and mapped in Neo4j!", video.Title),
+			"status":            "success",
+			"video_id":          video.ID,
+			"title":             video.Title,
+			"language":          embedRes.LanguageDisplay,
+			"detected_language": transcript.DetectedLanguage,
+			"chunks_count":      len(simpleChunks),
+			"neo4j_synced":      graphRes != nil,
+			"redirect_url":      redirectURL,
+			"message":           fmt.Sprintf("Video '%s' (%s) successfully indexed in Qdrant and mapped in Neo4j!", video.Title, embedRes.LanguageDisplay),
 		})
 	}
 

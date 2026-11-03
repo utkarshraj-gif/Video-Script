@@ -35,6 +35,7 @@ services:
       - WHISPER_MODEL=base
       - WHISPER_DEVICE=cpu
       - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_TASK=translate
       - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
       - QDRANT_URL=http://qdrant:6333
     volumes:

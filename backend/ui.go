@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // renderProductionUI renders a clean, white-and-light-blue, production-level UI with a static, non-shifting Chatbot,
@@ -12,6 +13,23 @@ import (
 func renderProductionUI(res *EmbedChunksResponse) string {
 	resBytes, _ := json.Marshal(res)
 	safeJSON := string(resBytes)
+
+	langBadge := "English"
+	if res.LanguageDisplay != "" {
+		langBadge = res.LanguageDisplay
+	} else if res.DetectedLanguage != "" {
+		l := strings.ToLower(strings.TrimSpace(res.DetectedLanguage))
+		switch l {
+		case "en", "english":
+			langBadge = "English"
+		case "hi", "hindi":
+			langBadge = "Hindi"
+		case "hi+en", "en+hi", "eng + hin", "hinglish":
+			langBadge = "Eng + Hin"
+		default:
+			langBadge = strings.ToUpper(l[:1]) + l[1:]
+		}
+	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
@@ -1025,6 +1043,8 @@ func renderProductionUI(res *EmbedChunksResponse) string {
             <span>Collection: <strong>%s</strong></span>
             <span>&bull;</span>
             <span>Model: <strong>384-dim all-MiniLM-L6-v2</strong></span>
+            <span>&bull;</span>
+            <span>Language: <strong id="videoLangDisplay" style="color:var(--primary); font-size:0.75rem;">%s</strong></span>
           </div>
         </div>
       </div>
@@ -1978,6 +1998,7 @@ func renderProductionUI(res *EmbedChunksResponse) string {
 		res.Title,
 		res.VideoID,
 		res.CollectionName,
+		langBadge,
 		res.TotalChunks,
 		res.VideoID,
 		res.VideoID,
