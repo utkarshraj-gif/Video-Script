@@ -2760,6 +2760,22 @@ Instructions:
 			return
 		}
 
+		// 0. Instant duplicate check: If video points already exist in Qdrant, return immediately (<15ms)
+		if extractedID, _, err := validateYouTubeURL(rawURL); err == nil && extractedID != "" {
+			qRes, qErr := requestQdrantPoints(extractedID, 1)
+			if qErr == nil && qRes != nil {
+				if pointsList, ok := qRes["points"].([]interface{}); ok && len(pointsList) > 0 {
+					c.JSON(http.StatusOK, gin.H{
+						"status":       "success",
+						"redirect_url": fmt.Sprintf("/api/v1/videos/%s/embeddings?format=html", extractedID),
+						"message":      fmt.Sprintf("Video '%s' is already processed and indexed! Loading dashboard...", extractedID),
+						"video_id":     extractedID,
+					})
+					return
+				}
+			}
+		}
+
 		// 1. Attempt asynchronous dispatch via Celery & Redis
 		taskID, cErr := triggerCeleryProcess(rawURL)
 		if cErr == nil && taskID != "" {

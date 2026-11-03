@@ -189,6 +189,56 @@ def process_video_pipeline(self, url_or_id: str):
     video_id = extract_video_id(url_or_id)
     canonical_url = f"https://www.youtube.com/watch?v={video_id}"
 
+    # 0. Instant Cache Check: If video chunks already exist in Qdrant, return cached success immediately!
+    ensure_qdrant_collection()
+    client = get_qdrant_client()
+    try:
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        scroll_res, _ = client.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="video_id", match=MatchValue(value=video_id))]
+            ),
+            limit=500,
+            with_payload=True,
+            with_vectors=True
+        )
+        if scroll_res and len(scroll_res) > 0:
+            cached_chunks = []
+            for pt in scroll_res:
+                p = pt.payload or {}
+                emb_prev = [round(float(x), 4) for x in pt.vector[:8]] if pt.vector else []
+                cached_chunks.append({
+                    "chunk_id": p.get("chunk_id", ""),
+                    "video_id": video_id,
+                    "chunk_index": int(p.get("chunk_index", 0)),
+                    "start_time": float(p.get("start_time", 0.0)),
+                    "end_time": float(p.get("end_time", 0.0)),
+                    "timestamp_display": p.get("timestamp_display", ""),
+                    "text": p.get("text", ""),
+                    "word_count": int(p.get("word_count", 0)),
+                    "segment_ids": p.get("segment_ids", []),
+                    "embedding_preview": emb_prev
+                })
+            cached_chunks.sort(key=lambda x: x["chunk_index"])
+            return {
+                "status": "success",
+                "video_id": video_id,
+                "title": f"YouTube Video ({video_id})",
+                "duration_seconds": 0,
+                "uploader": "Indexed Video",
+                "detected_language": "multilingual",
+                "language_display": "Auto-Indexed",
+                "language_probability": 1.0,
+                "transcription_time_seconds": 0.0,
+                "chunks_count": len(cached_chunks),
+                "chunks": cached_chunks,
+                "redirect_url": f"/api/v1/videos/{video_id}/embeddings?format=html",
+                "message": f"Video '{video_id}' loaded instantly from Qdrant vector index!"
+            }
+    except Exception as cache_err:
+        print(f"Notice: Qdrant cache check warning: {cache_err}")
+
     # Step 1: Validating YouTube URL & Metadata
     self.update_state(
         state="PROGRESS",
