@@ -736,7 +736,7 @@ func requestWhisperTranscription(videoID, audioFileName string) (*TranscriptionR
 	return &result, nil
 }
 
-// formatLanguageDisplay standardizes language labels into "English", "Hindi", or "Eng + Hin".
+// formatLanguageDisplay standardizes language labels into "English", "Hindi", "Eng + Hin", "Telugu", or "Eng + Tel".
 func formatLanguageDisplay(lang, explicitDisplay string) string {
 	if explicitDisplay != "" {
 		return explicitDisplay
@@ -749,6 +749,10 @@ func formatLanguageDisplay(lang, explicitDisplay string) string {
 		return "Hindi"
 	case "hi+en", "en+hi", "eng + hin", "hinglish":
 		return "Eng + Hin"
+	case "te", "telugu":
+		return "Telugu"
+	case "te+en", "en+te", "eng + tel", "tenglish":
+		return "Eng + Tel"
 	default:
 		if l == "" {
 			return "English"

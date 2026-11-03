@@ -26,6 +26,10 @@ func renderProductionUI(res *EmbedChunksResponse) string {
 			langBadge = "Hindi"
 		case "hi+en", "en+hi", "eng + hin", "hinglish":
 			langBadge = "Eng + Hin"
+		case "te", "telugu":
+			langBadge = "Telugu"
+		case "te+en", "en+te", "eng + tel", "tenglish":
+			langBadge = "Eng + Tel"
 		default:
 			langBadge = strings.ToUpper(l[:1]) + l[1:]
 		}

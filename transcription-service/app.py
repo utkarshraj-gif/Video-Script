@@ -324,17 +324,29 @@ def determine_language_label(info) -> str:
             
     en_prob = all_probs.get("en", 0.0)
     hi_prob = all_probs.get("hi", 0.0)
+    te_prob = all_probs.get("te", 0.0)
 
-    # If both Hindi and English have presence (Hinglish/combined):
-    if (lang == "hi" and en_prob >= 0.12) or (lang == "en" and hi_prob >= 0.12):
+    # Telugu & English code-mixing (Tenglish)
+    if (lang == "te" and en_prob >= 0.08) or (lang == "en" and te_prob >= 0.08):
+        return "Eng + Tel"
+
+    if lang == "te":
+        if en_prob >= 0.05:
+            return "Eng + Tel"
+        return "Telugu"
+
+    # Hindi & English code-mixing (Hinglish)
+    if (lang == "hi" and en_prob >= 0.08) or (lang == "en" and hi_prob >= 0.08):
         return "Eng + Hin"
 
     if lang == "hi":
-        if en_prob >= 0.08:
+        if en_prob >= 0.05:
             return "Eng + Hin"
         return "Hindi"
 
     if lang == "en":
+        if te_prob >= 0.08:
+            return "Eng + Tel"
         if hi_prob >= 0.08:
             return "Eng + Hin"
         return "English"
@@ -347,6 +359,8 @@ def determine_language_label(info) -> str:
         "ta": "Tamil",
         "bn": "Bengali",
         "mr": "Marathi",
+        "kn": "Kannada",
+        "ml": "Malayalam",
     }
     return lang_map.get(lang, lang.upper() if lang else "English")
 
