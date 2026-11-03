@@ -69,6 +69,7 @@ type TranscriptionResponse struct {
 	VideoID                  string                 `json:"video_id"`
 	Model                    string                 `json:"model"`
 	DetectedLanguage         string                 `json:"detected_language"`
+	LanguageDisplay          string                 `json:"language_display,omitempty"`
 	LanguageProbability      float64                `json:"language_probability"`
 	DurationSeconds          float64                `json:"duration_seconds"`
 	TranscriptionTimeSeconds float64                `json:"transcription_time_seconds"`
@@ -109,6 +110,9 @@ type EmbedChunksResponse struct {
 	Status              string               `json:"status"`
 	VideoID             string               `json:"video_id"`
 	Title               string               `json:"title,omitempty"`
+	DetectedLanguage    string               `json:"detected_language,omitempty"`
+	LanguageDisplay     string               `json:"language_display,omitempty"`
+	LanguageProbability float64              `json:"language_probability,omitempty"`
 	EmbeddingModel      string               `json:"embedding_model"`
 	EmbeddingDimensions int                  `json:"embedding_dimensions"`
 	QdrantMode          string               `json:"qdrant_mode"`
@@ -696,13 +700,14 @@ func requestWhisperTranscription(videoID, audioFileName string) (*TranscriptionR
 	payload := map[string]string{
 		"video_id":   videoID,
 		"audio_path": filepath.Join("/app/downloads", audioFileName),
+		"task":       "translate",
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("could not serialize transcription request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 300 * time.Second}
+	client := &http.Client{Timeout: 1200 * time.Second}
 	resp, err := client.Post(whisperURL+"/transcribe", "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return nil, fmt.Errorf("could not connect to faster-whisper service at %s: %w. Ensure whisper-service container is running", whisperURL, err)
@@ -724,7 +729,70 @@ func requestWhisperTranscription(videoID, audioFileName string) (*TranscriptionR
 		return nil, fmt.Errorf("could not parse transcription response: %w", err)
 	}
 
+	if result.LanguageDisplay == "" {
+		result.LanguageDisplay = formatLanguageDisplay(result.DetectedLanguage, "")
+	}
+
 	return &result, nil
+}
+
+// triggerCeleryProcess enqueues a background video processing task to Celery & Redis.
+func triggerCeleryProcess(videoURL string) (string, error) {
+	whisperURL := os.Getenv("WHISPER_SERVICE_URL")
+	if whisperURL == "" {
+		whisperURL = "http://whisper-service:5000"
+	}
+
+	payloadBytes, err := json.Marshal(map[string]string{"url": videoURL})
+	if err != nil {
+		return "", err
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(whisperURL+"/tasks/process-video", "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("celery dispatch returned HTTP %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Status string `json:"status"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", err
+	}
+
+	return res.TaskID, nil
+}
+
+// formatLanguageDisplay standardizes language labels into "English", "Hindi", "Eng + Hin", "Telugu", or "Eng + Tel".
+func formatLanguageDisplay(lang, explicitDisplay string) string {
+	if explicitDisplay != "" {
+		return explicitDisplay
+	}
+	l := strings.ToLower(strings.TrimSpace(lang))
+	switch l {
+	case "en", "english":
+		return "English"
+	case "hi", "hindi":
+		return "Hindi"
+	case "hi+en", "en+hi", "eng + hin", "hinglish":
+		return "Eng + Hin"
+	case "te", "telugu":
+		return "Telugu"
+	case "te+en", "en+te", "eng + tel", "tenglish":
+		return "Eng + Tel"
+	default:
+		if l == "" {
+			return "English"
+		}
+		return strings.ToUpper(l[:1]) + l[1:]
+	}
 }
 
 // requestQdrantPoints queries the Python microservice for points stored in Qdrant.
@@ -2159,6 +2227,94 @@ func main() {
 			return
 		}
 
+		// 1. If points already exist in Qdrant, construct EmbedChunksResponse and render immediately!
+		qRes, qErr := requestQdrantPoints(video.ID, 200)
+		if qErr == nil && qRes != nil {
+			if pointsList, ok := qRes["points"].([]interface{}); ok && len(pointsList) > 0 {
+				var chunksWithEmb []ChunkWithEmbedding
+				var simpleChunks []ChunkItem
+				for _, pItem := range pointsList {
+					if pMap, ok := pItem.(map[string]interface{}); ok {
+						payload, _ := pMap["payload"].(map[string]interface{})
+						cid, _ := payload["chunk_id"].(string)
+						cidx, _ := payload["chunk_index"].(float64)
+						st, _ := payload["start_time"].(float64)
+						et, _ := payload["end_time"].(float64)
+						td, _ := payload["timestamp_display"].(string)
+						txt, _ := payload["text"].(string)
+						wc, _ := payload["word_count"].(float64)
+						var ep []float64
+						if rawVec, ok := pMap["vector"].([]interface{}); ok {
+							for _, v := range rawVec {
+								if num, ok := v.(float64); ok {
+									ep = append(ep, num)
+								}
+							}
+						}
+						cwe := ChunkWithEmbedding{
+							ChunkID:          cid,
+							VideoID:          video.ID,
+							ChunkIndex:       int(cidx),
+							StartTime:        st,
+							EndTime:          et,
+							TimestampDisplay: td,
+							Text:             txt,
+							WordCount:        int(wc),
+							EmbeddingPreview: ep,
+						}
+						if len(ep) > 8 {
+							cwe.EmbeddingPreview = ep[:8]
+						}
+						cwe.EmbeddingVector = ep
+						chunksWithEmb = append(chunksWithEmb, cwe)
+						simpleChunks = append(simpleChunks, ChunkItem{
+							ChunkID:          cid,
+							VideoID:          video.ID,
+							ChunkIndex:       int(cidx),
+							StartTime:        st,
+							EndTime:          et,
+							TimestampDisplay: td,
+							Text:             txt,
+							WordCount:        int(wc),
+						})
+					}
+				}
+
+				if len(chunksWithEmb) > 0 {
+					videoChunksMu.Lock()
+					videoChunks[video.ID] = simpleChunks
+					videoChunksMu.Unlock()
+
+					embedRes := &EmbedChunksResponse{
+						Status:              "success",
+						VideoID:             video.ID,
+						Title:               video.Title,
+						DetectedLanguage:    "hi",
+						LanguageDisplay:     "Hindi",
+						EmbeddingModel:      "sentence-transformers/all-MiniLM-L6-v2",
+						EmbeddingDimensions: 384,
+						QdrantMode:          "Server (Qdrant Client)",
+						CollectionName:      "video_chunks",
+						QdrantStored:        true,
+						TotalChunks:         len(chunksWithEmb),
+						Chunks:              chunksWithEmb,
+						Message:             fmt.Sprintf("Loaded %d pre-indexed chunks from Qdrant.", len(chunksWithEmb)),
+					}
+
+					acceptHeader := c.GetHeader("Accept")
+					formatQuery := c.Query("format")
+					viewQuery := c.Query("view")
+					if strings.Contains(acceptHeader, "text/html") || formatQuery == "html" || viewQuery == "html" {
+						c.Header("Content-Type", "text/html; charset=utf-8")
+						c.String(http.StatusOK, renderEmbeddingsHTML(embedRes))
+						return
+					}
+					c.JSON(http.StatusOK, embedRes)
+					return
+				}
+			}
+		}
+
 		// Ensure transcription exists
 		transcriptsMu.RLock()
 		transcript, hasTranscript := transcripts[video.ID]
@@ -2206,6 +2362,9 @@ func main() {
 		}
 
 		result.Title = video.Title
+		result.DetectedLanguage = transcript.DetectedLanguage
+		result.LanguageDisplay = formatLanguageDisplay(transcript.DetectedLanguage, transcript.LanguageDisplay)
+		result.LanguageProbability = transcript.LanguageProbability
 
 		// Cache regular chunks
 		var simpleChunks []ChunkItem
@@ -2601,6 +2760,34 @@ Instructions:
 			return
 		}
 
+		// 0. Instant duplicate check: If video points already exist in Qdrant, return immediately (<15ms)
+		if extractedID, _, err := validateYouTubeURL(rawURL); err == nil && extractedID != "" {
+			qRes, qErr := requestQdrantPoints(extractedID, 1)
+			if qErr == nil && qRes != nil {
+				if pointsList, ok := qRes["points"].([]interface{}); ok && len(pointsList) > 0 {
+					c.JSON(http.StatusOK, gin.H{
+						"status":       "success",
+						"redirect_url": fmt.Sprintf("/api/v1/videos/%s/embeddings?format=html", extractedID),
+						"message":      fmt.Sprintf("Video '%s' is already processed and indexed! Loading dashboard...", extractedID),
+						"video_id":     extractedID,
+					})
+					return
+				}
+			}
+		}
+
+		// 1. Attempt asynchronous dispatch via Celery & Redis
+		taskID, cErr := triggerCeleryProcess(rawURL)
+		if cErr == nil && taskID != "" {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "queued",
+				"task_id": taskID,
+				"message": "Video processing queued in Celery worker. Processing in background...",
+			})
+			return
+		}
+
+		// 2. Synchronous fallback if Celery worker is unavailable
 		video, err := getOrCreateVideo(rawURL)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -2656,6 +2843,9 @@ Instructions:
 			return
 		}
 		embedRes.Title = video.Title
+		embedRes.DetectedLanguage = transcript.DetectedLanguage
+		embedRes.LanguageDisplay = formatLanguageDisplay(transcript.DetectedLanguage, transcript.LanguageDisplay)
+		embedRes.LanguageProbability = transcript.LanguageProbability
 
 		// 4. Cache simple chunks
 		var simpleChunks []ChunkItem
@@ -2689,14 +2879,120 @@ Instructions:
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":       "success",
-			"video_id":     video.ID,
-			"title":        video.Title,
-			"chunks_count": len(simpleChunks),
-			"neo4j_synced": graphRes != nil,
-			"redirect_url": redirectURL,
-			"message":      fmt.Sprintf("Video '%s' successfully indexed in Qdrant and mapped in Neo4j!", video.Title),
+			"status":            "success",
+			"video_id":          video.ID,
+			"title":             video.Title,
+			"language":          embedRes.LanguageDisplay,
+			"detected_language": transcript.DetectedLanguage,
+			"chunks_count":      len(simpleChunks),
+			"neo4j_synced":      graphRes != nil,
+			"redirect_url":      redirectURL,
+			"message":           fmt.Sprintf("Video '%s' (%s) successfully indexed in Qdrant and mapped in Neo4j!", video.Title, embedRes.LanguageDisplay),
 		})
+	}
+
+	// 23. Check Celery background task status and sync results
+	handleTaskStatus := func(c *gin.Context) {
+		taskID := c.Param("id")
+		if taskID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "task ID is required"})
+			return
+		}
+
+		whisperURL := os.Getenv("WHISPER_SERVICE_URL")
+		if whisperURL == "" {
+			whisperURL = "http://whisper-service:5000"
+		}
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Get(fmt.Sprintf("%s/tasks/%s", whisperURL, taskID))
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"status": "error", "message": fmt.Sprintf("could not query task status: %s", err.Error())})
+			return
+		}
+		defer resp.Body.Close()
+
+		var taskResp map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&taskResp); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "could not parse task status JSON"})
+			return
+		}
+
+		// When Celery task completes successfully, register video in Go backend & sync Neo4j
+		if state, ok := taskResp["status"].(string); ok && state == "SUCCESS" {
+			if resMap, ok := taskResp["result"].(map[string]interface{}); ok {
+				vid, _ := resMap["video_id"].(string)
+				title, _ := resMap["title"].(string)
+				dur, _ := resMap["duration_seconds"].(float64)
+				uploader, _ := resMap["uploader"].(string)
+				detectedLang, _ := resMap["detected_language"].(string)
+				langDisplay, _ := resMap["language_display"].(string)
+
+				if vid != "" {
+					video := Video{
+						ID:        vid,
+						URL:       fmt.Sprintf("https://www.youtube.com/watch?v=%s", vid),
+						Title:     title,
+						Uploader:  uploader,
+						Duration:  int(dur),
+						Platform:  "YouTube",
+						Status:    "ready",
+						CreatedAt: time.Now(),
+					}
+					videosMu.Lock()
+					videos[vid] = video
+					videosMu.Unlock()
+
+					// Cache chunks
+					var simpleChunks []ChunkItem
+					if rawChunks, ok := resMap["chunks"].([]interface{}); ok {
+						for _, rc := range rawChunks {
+							if cMap, ok := rc.(map[string]interface{}); ok {
+								cid, _ := cMap["chunk_id"].(string)
+								cidx, _ := cMap["chunk_index"].(float64)
+								st, _ := cMap["start_time"].(float64)
+								et, _ := cMap["end_time"].(float64)
+								td, _ := cMap["timestamp_display"].(string)
+								txt, _ := cMap["text"].(string)
+								wc, _ := cMap["word_count"].(float64)
+
+								simpleChunks = append(simpleChunks, ChunkItem{
+									ChunkID:          cid,
+									VideoID:          vid,
+									ChunkIndex:       int(cidx),
+									StartTime:        st,
+									EndTime:          et,
+									TimestampDisplay: td,
+									Text:             txt,
+									WordCount:        int(wc),
+								})
+							}
+						}
+					}
+					videoChunksMu.Lock()
+					videoChunks[vid] = simpleChunks
+					videoChunksMu.Unlock()
+
+					transcriptsMu.Lock()
+					transcripts[vid] = TranscriptionResponse{
+						Status:           "success",
+						VideoID:          vid,
+						Model:            "base",
+						DetectedLanguage: detectedLang,
+						LanguageDisplay:  langDisplay,
+						DurationSeconds:  dur,
+					}
+					transcriptsMu.Unlock()
+
+					// Synchronize knowledge graph into Neo4j
+					go func(v Video, ch []ChunkItem) {
+						syncVideoToNeo4j(v, ch)
+					}(video, simpleChunks)
+				}
+			}
+		}
+
+		c.JSON(resp.StatusCode, taskResp)
 	}
 
 	// 23. Run custom Cypher query from UI
@@ -2738,6 +3034,10 @@ Instructions:
 	router.GET("/api/v1/extract", handleProcessVideo)
 	router.POST("/process", handleProcessVideo)
 	router.GET("/process", handleProcessVideo)
+
+	// Celery Task Status routes
+	router.GET("/api/v1/tasks/:id", handleTaskStatus)
+	router.GET("/tasks/:id", handleTaskStatus)
 
 	// Chatbot routes
 	router.POST("/api/v1/videos/:id/chat", handleChat)

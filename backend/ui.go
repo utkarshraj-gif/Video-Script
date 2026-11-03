@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // renderProductionUI renders a clean, white-and-light-blue, production-level UI with a static, non-shifting Chatbot,
@@ -12,6 +13,27 @@ import (
 func renderProductionUI(res *EmbedChunksResponse) string {
 	resBytes, _ := json.Marshal(res)
 	safeJSON := string(resBytes)
+
+	langBadge := "English"
+	if res.LanguageDisplay != "" {
+		langBadge = res.LanguageDisplay
+	} else if res.DetectedLanguage != "" {
+		l := strings.ToLower(strings.TrimSpace(res.DetectedLanguage))
+		switch l {
+		case "en", "english":
+			langBadge = "English"
+		case "hi", "hindi":
+			langBadge = "Hindi"
+		case "hi+en", "en+hi", "eng + hin", "hinglish":
+			langBadge = "Eng + Hin"
+		case "te", "telugu":
+			langBadge = "Telugu"
+		case "te+en", "en+te", "eng + tel", "tenglish":
+			langBadge = "Eng + Tel"
+		default:
+			langBadge = strings.ToUpper(l[:1]) + l[1:]
+		}
+	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
@@ -1012,6 +1034,28 @@ func renderProductionUI(res *EmbedChunksResponse) string {
     </div>
   </div>
 
+  <!-- Live Background Task Progress Banner (Always visible when a Celery task is running) -->
+  <div id="liveTaskBanner" style="display:none; max-width:1440px; margin: 0 auto 16px; padding: 0 20px;">
+    <div style="background:linear-gradient(135deg, #0284c7, #0369a1); color:#ffffff; border-radius:12px; padding:12px 18px; box-shadow:0 4px 12px rgba(2, 132, 199, 0.25);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:1.1rem; display:inline-block; animation: spin 2s infinite linear;">⚙️</span>
+          <span style="font-weight:700; font-size:0.9rem;" id="bannerStepTitle">Background Processing in Progress...</span>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <span id="bannerPercentText" style="font-size:0.85rem; font-weight:700; background:rgba(255,255,255,0.25); padding:2px 10px; border-radius:12px;">15%%</span>
+          <button onclick="reopenModal()" class="btn btn-outline btn-sm" style="background:#ffffff; color:#0284c7; border:none; font-weight:700; padding:4px 12px; font-size:0.75rem; cursor:pointer;">View Live Checklist 👁️</button>
+        </div>
+      </div>
+      <div style="background:rgba(255,255,255,0.25); border-radius:6px; height:6px; overflow:hidden;">
+        <div id="bannerProgressBar" style="width:15%%; height:100%%; background:#38bdf8; transition: width 0.4s ease;"></div>
+      </div>
+      <div id="bannerMessageText" style="font-size:0.75rem; color:#e0f2fe; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+        Waiting for worker...
+      </div>
+    </div>
+  </div>
+
   <!-- Compact Video Hero & Tabs -->
   <div class="video-hero-compact">
     <div class="video-hero-inner">
@@ -1025,6 +1069,8 @@ func renderProductionUI(res *EmbedChunksResponse) string {
             <span>Collection: <strong>%s</strong></span>
             <span>&bull;</span>
             <span>Model: <strong>384-dim all-MiniLM-L6-v2</strong></span>
+            <span>&bull;</span>
+            <span>Language: <strong id="videoLangDisplay" style="color:var(--primary); font-size:0.75rem;">%s</strong></span>
           </div>
         </div>
       </div>
@@ -1214,6 +1260,9 @@ func renderProductionUI(res *EmbedChunksResponse) string {
         <div class="step-item" id="step5">🗄️ 5. Upserting Chunks into Qdrant</div>
         <div class="step-item" id="step6">🕸️ 6. Mapping Temporal Sequence in Neo4j</div>
       </div>
+      <button onclick="minimizeModal()" class="btn btn-outline btn-sm" style="margin-top:16px; width:100%%; border:1px solid #cbd5e1; color:#64748b; cursor:pointer;">
+        Hide & Monitor in Background ⬇️
+      </button>
     </div>
   </div>
 
@@ -1225,6 +1274,12 @@ func renderProductionUI(res *EmbedChunksResponse) string {
       renderChunks();
       // Setup graph on load
       setTimeout(() => { fetchAndRenderGraph(); }, 300);
+
+      // Check for active background task on page load
+      const savedTaskId = localStorage.getItem('active_video_rag_task');
+      if (savedTaskId) {
+        pollCeleryTask(savedTaskId, true);
+      }
     }
 
     function switchTab(tab) {
@@ -1890,7 +1945,7 @@ func renderProductionUI(res *EmbedChunksResponse) string {
       document.getElementById('chatMessages').innerHTML = '<div class="msg msg-bot"><div class="msg-avatar avatar-bot">AI</div><div class="msg-bubble">Chat history cleared. Ask another question about the video!</div></div>';
     }
 
-    // TOP URL EXTRACTION LOGIC
+    // TOP URL EXTRACTION LOGIC (Celery Background Worker + Real-Time Live UI)
     async function extractVideo() {
       const urlInput = document.getElementById('videoUrlInput');
       const url = urlInput.value.trim();
@@ -1902,22 +1957,18 @@ func renderProductionUI(res *EmbedChunksResponse) string {
       const modal = document.getElementById('processingModal');
       const extractBtn = document.getElementById('extractBtn');
       const progressBar = document.getElementById('modalProgressBar');
+      const modalDesc = document.getElementById('modalDesc');
+
       modal.style.display = 'flex';
       extractBtn.disabled = true;
-
-      // Animate progress steps
-      var pct = 15;
-      progressBar.style.width = pct + '%%';
-
-      const timer = setInterval(() => {
-        if (pct < 85) {
-          pct += 8;
-          progressBar.style.width = pct + '%%';
-          if (pct >= 30) document.getElementById('step2').className = 'step-item step-active';
-          if (pct >= 50) document.getElementById('step3').className = 'step-item step-active';
-          if (pct >= 70) document.getElementById('step4').className = 'step-item step-active';
-        }
-      }, 2500);
+      progressBar.style.width = '10%%';
+      modalDesc.textContent = 'Enqueuing video for background processing...';
+      document.getElementById('step1').className = 'step-item step-active';
+      document.getElementById('step2').className = 'step-item';
+      document.getElementById('step3').className = 'step-item';
+      document.getElementById('step4').className = 'step-item';
+      document.getElementById('step5').className = 'step-item';
+      document.getElementById('step6').className = 'step-item';
 
       try {
         const response = await fetch('/api/v1/videos/process', {
@@ -1926,25 +1977,114 @@ func renderProductionUI(res *EmbedChunksResponse) string {
           body: JSON.stringify({ url: url })
         });
 
-        clearInterval(timer);
-        progressBar.style.width = '100%%';
-        document.getElementById('step5').className = 'step-item step-active';
-        document.getElementById('step6').className = 'step-item step-active';
-
         const result = await response.json();
+
+        // 1. If task_id is returned, start live background polling immediately
+        if (result.task_id) {
+          localStorage.setItem('active_video_rag_task', result.task_id);
+          pollCeleryTask(result.task_id, false);
+          return;
+        }
+
+        // 2. Synchronous completion fallback
         if (result.status === 'success' && result.redirect_url) {
+          progressBar.style.width = '100%%';
+          document.getElementById('step6').className = 'step-item step-active';
           window.location.href = result.redirect_url;
         } else {
-          alert('Extraction failed: ' + (result.message || 'Unknown error'));
+          alert('Extraction notice: ' + (result.message || 'Unknown status'));
           modal.style.display = 'none';
           extractBtn.disabled = false;
         }
       } catch (e) {
-        clearInterval(timer);
         alert('Extraction error: ' + e.message);
         modal.style.display = 'none';
         extractBtn.disabled = false;
       }
+    }
+
+    function minimizeModal() {
+      document.getElementById('processingModal').style.display = 'none';
+      document.getElementById('extractBtn').disabled = false;
+    }
+
+    function reopenModal() {
+      document.getElementById('processingModal').style.display = 'flex';
+    }
+
+    let activePollInterval = null;
+    function pollCeleryTask(taskId, isBackgroundResume) {
+      const modal = document.getElementById('processingModal');
+      const extractBtn = document.getElementById('extractBtn');
+      const progressBar = document.getElementById('modalProgressBar');
+      const modalDesc = document.getElementById('modalDesc');
+
+      const banner = document.getElementById('liveTaskBanner');
+      const bannerTitle = document.getElementById('bannerStepTitle');
+      const bannerPercent = document.getElementById('bannerPercentText');
+      const bannerBar = document.getElementById('bannerProgressBar');
+      const bannerMsg = document.getElementById('bannerMessageText');
+
+      if (!isBackgroundResume) {
+        modal.style.display = 'flex';
+        extractBtn.disabled = true;
+      }
+      if (banner) banner.style.display = 'block';
+
+      if (activePollInterval) clearInterval(activePollInterval);
+
+      activePollInterval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/v1/tasks/' + taskId);
+          const data = await res.json();
+
+          const pct = data.percent || 15;
+          const pctStr = pct + '%%';
+          const msg = data.message || '';
+          const step = data.step || 'Processing video in background...';
+
+          if (progressBar) progressBar.style.width = pctStr;
+          if (modalDesc) modalDesc.textContent = msg;
+
+          if (bannerTitle) bannerTitle.textContent = step;
+          if (bannerPercent) bannerPercent.textContent = pctStr;
+          if (bannerBar) bannerBar.style.width = pctStr;
+          if (bannerMsg) bannerMsg.textContent = msg;
+
+          if (pct >= 15 && document.getElementById('step1')) document.getElementById('step1').className = 'step-item step-active';
+          if (pct >= 30 && document.getElementById('step2')) document.getElementById('step2').className = 'step-item step-active';
+          if (pct >= 55 && document.getElementById('step3')) document.getElementById('step3').className = 'step-item step-active';
+          if (pct >= 75 && document.getElementById('step4')) document.getElementById('step4').className = 'step-item step-active';
+          if (pct >= 88 && document.getElementById('step5')) document.getElementById('step5').className = 'step-item step-active';
+          if (pct >= 95 && document.getElementById('step6')) document.getElementById('step6').className = 'step-item step-active';
+
+          if (data.status === 'SUCCESS' || (data.result && data.result.status === 'success')) {
+            clearInterval(activePollInterval);
+            localStorage.removeItem('active_video_rag_task');
+
+            if (progressBar) progressBar.style.width = '100%%';
+            if (bannerBar) bannerBar.style.width = '100%%';
+            if (bannerPercent) bannerPercent.textContent = '100%%';
+            if (bannerTitle) bannerTitle.textContent = '✅ Extraction Complete!';
+            if (bannerMsg) bannerMsg.textContent = 'Redirecting to newly indexed video...';
+            if (modalDesc) modalDesc.textContent = 'Extraction complete! Loading dashboard...';
+
+            const targetUrl = (data.result && data.result.redirect_url) ? data.result.redirect_url : ('/?video_id=' + (data.result ? data.result.video_id : ''));
+            setTimeout(() => {
+              window.location.href = targetUrl;
+            }, 800);
+          } else if (data.status === 'FAILURE') {
+            clearInterval(activePollInterval);
+            localStorage.removeItem('active_video_rag_task');
+            if (banner) banner.style.display = 'none';
+            alert('Celery extraction failed: ' + (data.error || data.message || 'Unknown error'));
+            modal.style.display = 'none';
+            extractBtn.disabled = false;
+          }
+        } catch (err) {
+          console.error('Task polling error:', err);
+        }
+      }, 1500);
     }
 
     function escapeHtml(str) {
@@ -1978,6 +2118,7 @@ func renderProductionUI(res *EmbedChunksResponse) string {
 		res.Title,
 		res.VideoID,
 		res.CollectionName,
+		langBadge,
 		res.TotalChunks,
 		res.VideoID,
 		res.VideoID,

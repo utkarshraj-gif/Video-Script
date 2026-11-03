@@ -151,12 +151,14 @@ class TranscribeRequest(BaseModel):
     audio_path: Optional[str] = None
     video_id: Optional[str] = None
     language: Optional[str] = None
+    task: Optional[str] = "translate"
 
 class TranscribeResponse(BaseModel):
     status: str
     video_id: str
     model: str
     detected_language: str
+    language_display: str
     language_probability: float
     duration_seconds: float
     transcription_time_seconds: float
@@ -311,6 +313,57 @@ def health_check():
         "collection": COLLECTION_NAME
     }
 
+def determine_language_label(info) -> str:
+    lang = (getattr(info, "language", None) or "").lower()
+    all_probs = {}
+    if hasattr(info, "all_language_probs") and info.all_language_probs:
+        try:
+            all_probs = {k.lower(): v for k, v in info.all_language_probs}
+        except Exception:
+            all_probs = {}
+            
+    en_prob = all_probs.get("en", 0.0)
+    hi_prob = all_probs.get("hi", 0.0)
+    te_prob = all_probs.get("te", 0.0)
+
+    # Telugu & English code-mixing (Tenglish)
+    if (lang == "te" and en_prob >= 0.08) or (lang == "en" and te_prob >= 0.08):
+        return "Eng + Tel"
+
+    if lang == "te":
+        if en_prob >= 0.05:
+            return "Eng + Tel"
+        return "Telugu"
+
+    # Hindi & English code-mixing (Hinglish)
+    if (lang == "hi" and en_prob >= 0.08) or (lang == "en" and hi_prob >= 0.08):
+        return "Eng + Hin"
+
+    if lang == "hi":
+        if en_prob >= 0.05:
+            return "Eng + Hin"
+        return "Hindi"
+
+    if lang == "en":
+        if te_prob >= 0.08:
+            return "Eng + Tel"
+        if hi_prob >= 0.08:
+            return "Eng + Hin"
+        return "English"
+
+    lang_map = {
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "te": "Telugu",
+        "ta": "Tamil",
+        "bn": "Bengali",
+        "mr": "Marathi",
+        "kn": "Kannada",
+        "ml": "Malayalam",
+    }
+    return lang_map.get(lang, lang.upper() if lang else "English")
+
 @app.post("/transcribe", response_model=TranscribeResponse)
 def transcribe_audio(req: TranscribeRequest):
     audio_path = req.audio_path
@@ -352,10 +405,12 @@ def transcribe_audio(req: TranscribeRequest):
         model = get_whisper_model()
         start_time = time.time()
 
+        task = req.task or os.getenv("WHISPER_TASK", "translate")
         segments_generator, info = model.transcribe(
             audio_path,
             beam_size=5,
             language=req.language,
+            task=task,
             vad_filter=True
         )
 
@@ -380,6 +435,7 @@ def transcribe_audio(req: TranscribeRequest):
             video_id=video_id,
             model=WHISPER_MODEL_SIZE,
             detected_language=info.language,
+            language_display=determine_language_label(info),
             language_probability=round(info.language_probability, 3),
             duration_seconds=round(info.duration, 2),
             transcription_time_seconds=transcription_time,
@@ -589,3 +645,72 @@ def list_qdrant_points(video_id: Optional[str] = None, limit: int = 100):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to scroll points from Qdrant: {str(e)}")
+
+class CeleryProcessRequest(BaseModel):
+    url: str
+
+@app.post("/tasks/process-video")
+def trigger_process_video(req: CeleryProcessRequest):
+    try:
+        from tasks import process_video_pipeline
+        task = process_video_pipeline.delay(req.url)
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "message": "Video processing queued in Celery worker"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to enqueue task: {str(e)}")
+
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    from celery_app import celery_app
+    from celery.result import AsyncResult
+
+    res = AsyncResult(task_id, app=celery_app)
+    state = res.state
+
+    if state == "PENDING":
+        return {
+            "task_id": task_id,
+            "status": "PENDING",
+            "percent": 10,
+            "step": "Queued in Celery",
+            "message": "Waiting for Celery worker to pick up task..."
+        }
+    elif state in ("PROGRESS", "STARTED"):
+        info = res.info if isinstance(res.info, dict) else {}
+        return {
+            "task_id": task_id,
+            "status": "PROGRESS",
+            "percent": info.get("percent", 25),
+            "step": info.get("step", "Processing video..."),
+            "message": info.get("message", "Celery worker processing...")
+        }
+    elif state == "SUCCESS":
+        return {
+            "task_id": task_id,
+            "status": "SUCCESS",
+            "percent": 100,
+            "step": "Complete",
+            "result": res.result,
+            "message": res.result.get("message", "Processing completed successfully!") if isinstance(res.result, dict) else "Done"
+        }
+    elif state == "FAILURE":
+        return {
+            "task_id": task_id,
+            "status": "FAILURE",
+            "percent": 100,
+            "step": "Failed",
+            "error": str(res.info) or "Task encountered an error",
+            "message": f"Task failed: {str(res.info)}"
+        }
+    else:
+        return {
+            "task_id": task_id,
+            "status": state,
+            "percent": 50,
+            "step": state,
+            "message": f"Task in state: {state}"
+        }
+
